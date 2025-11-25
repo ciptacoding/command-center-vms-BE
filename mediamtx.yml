@@ -1,0 +1,56 @@
+# MediaMTX Configuration
+# MediaMTX acts as a media router: RTSP → HLS/LL-HLS for browser playback
+
+# Logging
+logLevel: info
+logDestinations: [stdout]
+logFile: ""
+
+# API server (for configuration management)
+api: yes
+apiAddress: :9997
+
+# Metrics
+metrics: yes
+metricsAddress: :9998
+
+# RTSP server (for ingesting RTSP streams from cameras)
+rtspAddress: :8554
+
+# HLS server (for serving HLS streams to browsers)
+hlsAddress: :8888
+hlsEncryption: no
+
+# Paths configuration
+# Each camera will have its own path (e.g., /cam01, /cam02)
+# Paths can be configured via API or auto-created on first publish
+paths:
+  # Example path - will be created dynamically via API
+  # cam01:
+  #   source: rtsp://camera-ip:554/stream
+  #   sourceOnDemand: yes
+  #   sourceOnDemandStartTimeout: 10s
+  #   sourceOnDemandCloseAfter: 10s
+
+# HLS settings for all paths
+hlsVariant: lowLatency   # Use LL-HLS (Low Latency HLS) for better latency
+hlsSegmentCount: 6      # Number of segments to keep
+hlsSegmentDuration: 2s  # Segment duration
+hlsPartDuration: 200ms  # Part duration for LL-HLS
+hlsSegmentMaxSize: 50MB # Max segment size
+hlsAllowOrigin: "*"     # CORS - allow all origins for development
+
+# RTSP settings (using default, can be customized if needed)
+# rtspUDPRTPAddress: :8000
+# rtspUDPRTCPAddress: :8001
+
+# Authentication (optional - can be enabled later)
+# authMethods: [internal, http]
+# authHTTPAddress: :8888
+
+# Recording (optional - can be enabled later if needed)
+# paths:
+#   all:
+#     record: yes
+#     recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+#     recordFormat: mp4

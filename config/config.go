@@ -9,6 +9,7 @@ type Config struct {
 	Database DatabaseConfig
 	JWT      JWTConfig
 	RTSP     RTSPConfig
+	MediaMTX MediaMTXConfig
 }
 
 type ServerConfig struct {
@@ -30,8 +31,15 @@ type JWTConfig struct {
 }
 
 type RTSPConfig struct {
-	StreamPath  string
-	OutputPath  string
+	StreamPath string
+	OutputPath string
+}
+
+type MediaMTXConfig struct {
+	Host       string // Internal hostname (for backend to communicate with MediaMTX)
+	PublicHost string // Public hostname (for frontend/browser to access HLS streams)
+	HTTPPort   string
+	APIPort    string
 }
 
 func Load() *Config {
@@ -55,6 +63,12 @@ func Load() *Config {
 			StreamPath: getEnv("RTSP_STREAM_PATH", "/streams"),
 			OutputPath: getEnv("HLS_OUTPUT_PATH", "./hls_output"),
 		},
+		MediaMTX: MediaMTXConfig{
+			Host:       getEnv("MEDIAMTX_HOST", "localhost"),        // Internal: for backend
+			PublicHost: getEnv("MEDIAMTX_PUBLIC_HOST", "localhost"), // Public: for frontend/browser
+			HTTPPort:   getEnv("MEDIAMTX_HTTP_PORT", "8888"),
+			APIPort:    getEnv("MEDIAMTX_API_PORT", "9997"),
+		},
 	}
 }
 
@@ -64,4 +78,3 @@ func getEnv(key, defaultValue string) string {
 	}
 	return defaultValue
 }
-

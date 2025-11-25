@@ -30,7 +30,10 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
-	// Initialize RTSP service (for HLS fallback)
+	// Initialize MediaMTX service (RTSP → HLS via MediaMTX)
+	mediamtxService := services.NewMediaMTXService(cfg.MediaMTX)
+
+	// Initialize RTSP service (legacy, kept for backward compatibility)
 	rtspService := services.NewRTSPService(cfg.RTSP)
 
 	// Initialize MJPEG service (simple, real-time streaming without file storage)
@@ -41,7 +44,7 @@ func main() {
 
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(db, cfg.JWT)
-	cameraHandler := handlers.NewCameraHandler(db, rtspService, mjpegService, webrtcService)
+	cameraHandler := handlers.NewCameraHandler(db, mediamtxService, rtspService, mjpegService, webrtcService)
 
 	// Setup router
 	router := setupRouter(authHandler, cameraHandler, cfg)
@@ -94,23 +97,9 @@ func setupRouter(authHandler *handlers.AuthHandler, cameraHandler *handlers.Came
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// Serve HLS files statically with CORS headers
-	staticGroup := router.Group(cfg.RTSP.StreamPath)
-	staticGroup.Use(func(c *gin.Context) {
-		// Add CORS headers for static files
-		origin := c.GetHeader("Origin")
-		if origin == "http://localhost:8080" || origin == "http://localhost:5173" || origin == "http://localhost:3000" ||
-			origin == "http://127.0.0.1:8080" || origin == "http://127.0.0.1:5173" || origin == "http://127.0.0.1:3000" {
-			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Access-Control-Allow-Credentials", "true")
-		}
-		// Add cache control headers for live streaming
-		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
-		c.Header("Pragma", "no-cache")
-		c.Header("Expires", "0")
-		c.Next()
-	})
-	staticGroup.Static("/", cfg.RTSP.OutputPath)
+	// Note: HLS streams are now served directly by MediaMTX on port 8888
+	// No need to serve static files from backend anymore
+	// MediaMTX handles CORS and cache headers in its configuration
 
 	// Public routes
 	api := router.Group("/api/v1")
@@ -140,12 +129,11 @@ func setupRouter(authHandler *handlers.AuthHandler, cameraHandler *handlers.Came
 			cameras.DELETE("/:id", cameraHandler.DeleteCamera)
 			cameras.GET("/:id/stream", cameraHandler.GetStreamURL) // HLS stream (legacy)
 			cameras.GET("/:id/stream/health", cameraHandler.GetStreamHealth)
-			cameras.GET("/:id/mjpeg", cameraHandler.GetMJPEGStream) // MJPEG stream (simple, real-time, no file storage)
-			cameras.GET("/:id/webrtc", cameraHandler.GetWebRTCStream) // WebRTC stream (optional)
+			cameras.GET("/:id/mjpeg", cameraHandler.GetMJPEGStream)            // MJPEG stream (simple, real-time, no file storage)
+			cameras.GET("/:id/webrtc", cameraHandler.GetWebRTCStream)          // WebRTC stream (optional)
 			cameras.GET("/:id/webrtc/ws", cameraHandler.HandleWebRTCWebSocket) // WebRTC WebSocket signaling
 		}
 	}
 
 	return router
 }
-

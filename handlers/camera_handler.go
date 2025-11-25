@@ -6,9 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"command-center-vms-cctv/be/models"
 	"command-center-vms-cctv/be/services"
@@ -19,18 +17,20 @@ import (
 )
 
 type CameraHandler struct {
-	db           *gorm.DB
-	rtspService  *services.RTSPService
-	mjpegService *services.MJPEGService
-	webrtcService *services.WebRTCService
+	db              *gorm.DB
+	mediamtxService *services.MediaMTXService
+	rtspService     *services.RTSPService
+	mjpegService    *services.MJPEGService
+	webrtcService   *services.WebRTCService
 }
 
-func NewCameraHandler(db *gorm.DB, rtspService *services.RTSPService, mjpegService *services.MJPEGService, webrtcService *services.WebRTCService) *CameraHandler {
+func NewCameraHandler(db *gorm.DB, mediamtxService *services.MediaMTXService, rtspService *services.RTSPService, mjpegService *services.MJPEGService, webrtcService *services.WebRTCService) *CameraHandler {
 	return &CameraHandler{
-		db:            db,
-		rtspService:   rtspService,
-		mjpegService:  mjpegService,
-		webrtcService: webrtcService,
+		db:              db,
+		mediamtxService: mediamtxService,
+		rtspService:     rtspService,
+		mjpegService:    mjpegService,
+		webrtcService:   webrtcService,
 	}
 }
 
@@ -55,23 +55,23 @@ var upgrader = websocket.Upgrader{
 }
 
 type CreateCameraRequest struct {
-	Name     string  `json:"name" binding:"required"`
-	Latitude float64 `json:"latitude" binding:"required"`
+	Name      string  `json:"name" binding:"required"`
+	Latitude  float64 `json:"latitude" binding:"required"`
 	Longitude float64 `json:"longitude" binding:"required"`
-	RTSPUrl  string  `json:"rtsp_url" binding:"required"`
-	Area     string  `json:"area" binding:"required"`
-	Building string  `json:"building" binding:"required"`
-	Status   string  `json:"status"`
+	RTSPUrl   string  `json:"rtsp_url" binding:"required"`
+	Area      string  `json:"area" binding:"required"`
+	Building  string  `json:"building" binding:"required"`
+	Status    string  `json:"status"`
 }
 
 type UpdateCameraRequest struct {
-	Name     *string  `json:"name"`
-	Latitude *float64 `json:"latitude"`
+	Name      *string  `json:"name"`
+	Latitude  *float64 `json:"latitude"`
 	Longitude *float64 `json:"longitude"`
-	RTSPUrl  *string  `json:"rtsp_url"`
-	Area     *string  `json:"area"`
-	Building *string  `json:"building"`
-	Status   *string  `json:"status"`
+	RTSPUrl   *string  `json:"rtsp_url"`
+	Area      *string  `json:"area"`
+	Building  *string  `json:"building"`
+	Status    *string  `json:"status"`
 }
 
 func (h *CameraHandler) GetCameras(c *gin.Context) {
@@ -86,7 +86,7 @@ func (h *CameraHandler) GetCameras(c *gin.Context) {
 
 func (h *CameraHandler) GetCamera(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	var camera models.Camera
 	if err := h.db.First(&camera, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -113,13 +113,13 @@ func (h *CameraHandler) CreateCamera(c *gin.Context) {
 	}
 
 	camera := models.Camera{
-		Name:     req.Name,
-		Latitude: req.Latitude,
+		Name:      req.Name,
+		Latitude:  req.Latitude,
 		Longitude: req.Longitude,
-		RTSPUrl:  req.RTSPUrl,
-		Status:   status,
-		Area:     req.Area,
-		Building: req.Building,
+		RTSPUrl:   req.RTSPUrl,
+		Status:    status,
+		Area:      req.Area,
+		Building:  req.Building,
 	}
 
 	if err := h.db.Create(&camera).Error; err != nil {
@@ -132,7 +132,7 @@ func (h *CameraHandler) CreateCamera(c *gin.Context) {
 
 func (h *CameraHandler) UpdateCamera(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	var req UpdateCameraRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -182,7 +182,7 @@ func (h *CameraHandler) UpdateCamera(c *gin.Context) {
 
 func (h *CameraHandler) DeleteCamera(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	if err := h.db.Delete(&models.Camera{}, id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete camera"})
 		return
@@ -193,7 +193,7 @@ func (h *CameraHandler) DeleteCamera(c *gin.Context) {
 
 func (h *CameraHandler) GetStreamURL(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	var camera models.Camera
 	if err := h.db.First(&camera, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -204,51 +204,27 @@ func (h *CameraHandler) GetStreamURL(c *gin.Context) {
 		return
 	}
 
-	// Start RTSP stream and get HLS URL
-	hlsURL, err := h.rtspService.StartStream(camera.ID, camera.RTSPUrl)
+	// Configure MediaMTX path and get HLS URL
+	// MediaMTX will pull RTSP stream from camera and serve as HLS
+	hlsURL, err := h.mediamtxService.StartStream(camera.ID, camera.RTSPUrl)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start stream: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to configure MediaMTX stream: " + err.Error()})
 		return
 	}
 
-	// Wait for FFmpeg to create the playlist file
-	// This helps prevent 404 errors on first request
-	// Check if playlist file exists and has content
-	playlistPath := filepath.Join("/tmp/hls_output", fmt.Sprintf("camera_%d", camera.ID), "playlist.m3u8")
-	maxWait := 15 // seconds - increased wait time for FFmpeg to start
-	waited := false
-	for i := 0; i < maxWait; i++ {
-		if fileInfo, err := os.Stat(playlistPath); err == nil {
-			// File exists, check if it has content and is being updated
-			if fileInfo.Size() > 0 {
-				// Check if file was updated recently (within last 3 seconds)
-				if time.Since(fileInfo.ModTime()) < 3*time.Second {
-					waited = true
-					fmt.Printf("[Stream] Playlist file ready for camera %d after %d seconds\n", camera.ID, i+1)
-					break
-				}
-			}
-		}
-		time.Sleep(1 * time.Second)
-	}
-	
-	if !waited {
-		fmt.Printf("[Stream] Warning: Playlist file not ready for camera %d after %d seconds, but returning URL anyway\n", camera.ID, maxWait)
-	}
-
 	// Get stream health status
-	isHealthy, _ := h.rtspService.GetStreamHealth(camera.ID)
+	isHealthy, _ := h.mediamtxService.GetStreamHealth(camera.ID)
 
 	c.JSON(http.StatusOK, gin.H{
-		"hls_url": hlsURL,
-		"camera_id": camera.ID,
+		"hls_url":    hlsURL,
+		"camera_id":  camera.ID,
 		"is_healthy": isHealthy,
 	})
 }
 
 func (h *CameraHandler) GetStreamHealth(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	var camera models.Camera
 	if err := h.db.First(&camera, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -259,19 +235,19 @@ func (h *CameraHandler) GetStreamHealth(c *gin.Context) {
 		return
 	}
 
-	// Get stream health status
-	isHealthy, err := h.rtspService.GetStreamHealth(camera.ID)
+	// Get stream health status from MediaMTX
+	isHealthy, err := h.mediamtxService.GetStreamHealth(camera.ID)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
-			"camera_id": camera.ID,
+			"camera_id":  camera.ID,
 			"is_healthy": false,
-			"error": err.Error(),
+			"error":      err.Error(),
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"camera_id": camera.ID,
+		"camera_id":  camera.ID,
 		"is_healthy": isHealthy,
 	})
 }
@@ -279,7 +255,7 @@ func (h *CameraHandler) GetStreamHealth(c *gin.Context) {
 // GetWebRTCStream starts WebRTC stream for a camera
 func (h *CameraHandler) GetWebRTCStream(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	var camera models.Camera
 	if err := h.db.First(&camera, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -321,7 +297,7 @@ func (h *CameraHandler) GetWebRTCStream(c *gin.Context) {
 		// Development: always use localhost:8081 (backend port from docker-compose)
 		host = "localhost:8081"
 	}
-	
+
 	// Determine scheme based on request
 	scheme := "ws"
 	if c.Request.TLS != nil {
@@ -329,14 +305,14 @@ func (h *CameraHandler) GetWebRTCStream(c *gin.Context) {
 	} else if c.GetHeader("X-Forwarded-Proto") == "https" {
 		scheme = "wss"
 	}
-	
+
 	// Construct WebSocket URL
 	wsURL := fmt.Sprintf("%s://%s/api/v1/cameras/%d/webrtc/ws", scheme, host, camera.ID)
 	fmt.Printf("[WebRTC] Generated WebSocket URL for camera %d: %s (request host: %s, mode: %s)\n", camera.ID, wsURL, c.Request.Host, os.Getenv("GIN_MODE"))
 
 	c.JSON(http.StatusOK, gin.H{
-		"camera_id": camera.ID,
-		"stream_type": "webrtc",
+		"camera_id":     camera.ID,
+		"stream_type":   "webrtc",
 		"websocket_url": wsURL,
 	})
 }
@@ -344,7 +320,7 @@ func (h *CameraHandler) GetWebRTCStream(c *gin.Context) {
 // HandleWebRTCWebSocket handles WebSocket connection for WebRTC signaling
 func (h *CameraHandler) HandleWebRTCWebSocket(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	// Check authentication first (before upgrading)
 	// Auth middleware should have validated token, but check user_id is set
 	userID, exists := c.Get("user_id")
@@ -354,7 +330,7 @@ func (h *CameraHandler) HandleWebRTCWebSocket(c *gin.Context) {
 		return
 	}
 	log.Printf("[WebRTC] WebSocket connection from user %v for camera %s\n", userID, id)
-	
+
 	// Check camera exists before upgrading
 	var camera models.Camera
 	if err := h.db.First(&camera, id).Error; err != nil {
@@ -369,7 +345,7 @@ func (h *CameraHandler) HandleWebRTCWebSocket(c *gin.Context) {
 	}
 
 	log.Printf("[WebRTC] Upgrading to WebSocket for camera %d (RTSP: %s)\n", camera.ID, camera.RTSPUrl)
-	
+
 	// Upgrade to WebSocket - must be done before any response is written
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -388,7 +364,7 @@ func (h *CameraHandler) HandleWebRTCWebSocket(c *gin.Context) {
 // Simple HTTP streaming - no WebSocket, no file storage needed
 func (h *CameraHandler) GetMJPEGStream(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	var camera models.Camera
 	if err := h.db.First(&camera, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -428,7 +404,7 @@ func (h *CameraHandler) GetMJPEGStream(c *gin.Context) {
 	// FFmpeg with -f mjpeg already outputs multipart/x-mixed-replace format
 	// Just pipe it directly to HTTP response
 	buffer := make([]byte, 8192)
-	
+
 	c.Stream(func(w io.Writer) bool {
 		n, err := reader.Read(buffer)
 		if n > 0 {
@@ -443,8 +419,6 @@ func (h *CameraHandler) GetMJPEGStream(c *gin.Context) {
 		}
 		return err == nil
 	})
-	
+
 	fmt.Printf("[MJPEG] Stream finished for camera %d\n", camera.ID)
 }
-
-
