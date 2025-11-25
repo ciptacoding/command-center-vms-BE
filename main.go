@@ -30,12 +30,18 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
-	// Initialize RTSP service
+	// Initialize RTSP service (for HLS fallback)
 	rtspService := services.NewRTSPService(cfg.RTSP)
+
+	// Initialize MJPEG service (simple, real-time streaming without file storage)
+	mjpegService := services.NewMJPEGService()
+
+	// Initialize WebRTC service (optional, more complex)
+	webrtcService := services.NewWebRTCService()
 
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(db, cfg.JWT)
-	cameraHandler := handlers.NewCameraHandler(db, rtspService)
+	cameraHandler := handlers.NewCameraHandler(db, rtspService, mjpegService, webrtcService)
 
 	// Setup router
 	router := setupRouter(authHandler, cameraHandler, cfg)
@@ -77,8 +83,8 @@ func setupRouter(authHandler *handlers.AuthHandler, cameraHandler *handlers.Came
 				origin == "http://127.0.0.1:3000"
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"},
-		ExposeHeaders:    []string{"Content-Length", "Content-Type"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With", "Cache-Control", "Pragma"},
+		ExposeHeaders:    []string{"Content-Length", "Content-Type", "Cache-Control", "Pragma", "Expires"},
 		AllowCredentials: true,
 		MaxAge:           12 * 3600, // 12 hours
 	}))
@@ -88,8 +94,23 @@ func setupRouter(authHandler *handlers.AuthHandler, cameraHandler *handlers.Came
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// Serve HLS files statically
-	router.Static(cfg.RTSP.StreamPath, cfg.RTSP.OutputPath)
+	// Serve HLS files statically with CORS headers
+	staticGroup := router.Group(cfg.RTSP.StreamPath)
+	staticGroup.Use(func(c *gin.Context) {
+		// Add CORS headers for static files
+		origin := c.GetHeader("Origin")
+		if origin == "http://localhost:8080" || origin == "http://localhost:5173" || origin == "http://localhost:3000" ||
+			origin == "http://127.0.0.1:8080" || origin == "http://127.0.0.1:5173" || origin == "http://127.0.0.1:3000" {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Credentials", "true")
+		}
+		// Add cache control headers for live streaming
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+		c.Header("Pragma", "no-cache")
+		c.Header("Expires", "0")
+		c.Next()
+	})
+	staticGroup.Static("/", cfg.RTSP.OutputPath)
 
 	// Public routes
 	api := router.Group("/api/v1")
@@ -117,8 +138,11 @@ func setupRouter(authHandler *handlers.AuthHandler, cameraHandler *handlers.Came
 			cameras.POST("", cameraHandler.CreateCamera)
 			cameras.PUT("/:id", cameraHandler.UpdateCamera)
 			cameras.DELETE("/:id", cameraHandler.DeleteCamera)
-			cameras.GET("/:id/stream", cameraHandler.GetStreamURL)
+			cameras.GET("/:id/stream", cameraHandler.GetStreamURL) // HLS stream (legacy)
 			cameras.GET("/:id/stream/health", cameraHandler.GetStreamHealth)
+			cameras.GET("/:id/mjpeg", cameraHandler.GetMJPEGStream) // MJPEG stream (simple, real-time, no file storage)
+			cameras.GET("/:id/webrtc", cameraHandler.GetWebRTCStream) // WebRTC stream (optional)
+			cameras.GET("/:id/webrtc/ws", cameraHandler.HandleWebRTCWebSocket) // WebRTC WebSocket signaling
 		}
 	}
 
