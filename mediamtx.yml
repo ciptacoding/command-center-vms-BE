@@ -33,12 +33,13 @@ paths:
   #   sourceOnDemandCloseAfter: 10s
 
 # HLS settings for all paths
-hlsVariant: lowLatency   # Use LL-HLS (Low Latency HLS) for better latency
+# Using standard HLS (not LL-HLS) for stability and smooth playback
+hlsVariant: mpegts      # Use standard HLS (mpegts) for stability
 hlsSegmentCount: 6      # Number of segments to keep
 hlsSegmentDuration: 2s  # Segment duration
-hlsPartDuration: 200ms  # Part duration for LL-HLS
 hlsSegmentMaxSize: 50MB # Max segment size
 hlsAllowOrigin: "*"     # CORS - allow all origins for development
+# Note: Removed hlsPartDuration (only for LL-HLS)
 
 # RTSP settings (using default, can be customized if needed)
 # rtspUDPRTPAddress: :8000
